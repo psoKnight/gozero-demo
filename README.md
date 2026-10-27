@@ -133,6 +133,157 @@ Gateway 为 Greeter 和 Calculator 分别维护熔断器。`InvalidArgument`、
 所有下游调用同时有 3 秒上下文超时和 zrpc 客户端超时。限流器与熔断器均为进程级
 状态；如果要求集群级统一配额，应在 API Gateway、Service Mesh 或 Redis 中实现。
 
+## 新增 Calculator 运算
+
+以新增 `Subtract`（减法）为例，一个可调用的 Calculator 运算需要同步修改
+protobuf、服务端 Logic、gRPC Server、客户端封装和 Gateway 分发。
+
+### 1. 修改 protobuf
+
+在 `pbdata/calculatorpb/calculator.proto` 的 `Calculator` service 中增加 RPC：
+
+```proto
+service Calculator {
+  rpc Add(BinaryOperationRequest) returns (OperationReply);
+  rpc Multiply(BinaryOperationRequest) returns (OperationReply);
+  rpc Subtract(BinaryOperationRequest) returns (OperationReply);
+}
+```
+
+重新生成 protobuf：
+
+```bash
+bash pbdata/calculatorpb/pb.sh
+```
+
+### 2. 新增业务 Logic
+
+新增 `calculator/internal/logic/subtractlogic.go`：
+
+```go
+package logic
+
+import (
+	"context"
+	"math/big"
+
+	"github.com/zeromicro/go-zero/core/logx"
+	"gozero-demo/calculator/internal/svc"
+	"gozero-demo/pbdata/calculatorpb"
+)
+
+type SubtractLogic struct {
+	ctx    context.Context
+	svcCtx *svc.ServiceContext
+	logx.Logger
+}
+
+func NewSubtractLogic(ctx context.Context, svcCtx *svc.ServiceContext) *SubtractLogic {
+	return &SubtractLogic{
+		ctx:    ctx,
+		svcCtx: svcCtx,
+		Logger: logx.WithContext(ctx),
+	}
+}
+
+func (l *SubtractLogic) Subtract(in *calculatorpb.BinaryOperationRequest) (*calculatorpb.OperationReply, error) {
+	result := new(big.Int).Sub(
+		big.NewInt(in.GetLeft()),
+		big.NewInt(in.GetRight()),
+	)
+	if !result.IsInt64() {
+		return nil, overflowError()
+	}
+	return &calculatorpb.OperationReply{Result: result.Int64()}, nil
+}
+```
+
+### 3. 挂载 gRPC Server
+
+`calculator/internal/server/calculatorserver.go` 是 goctl 生成文件，不建议直接
+修改。新增 `calculator/internal/server/subtractserver.go`：
+
+```go
+package server
+
+import (
+	"context"
+
+	"gozero-demo/calculator/internal/logic"
+	"gozero-demo/pbdata/calculatorpb"
+)
+
+func (s *CalculatorServer) Subtract(
+	ctx context.Context,
+	in *calculatorpb.BinaryOperationRequest,
+) (*calculatorpb.OperationReply, error) {
+	return logic.NewSubtractLogic(ctx, s.svcCtx).Subtract(in)
+}
+```
+
+### 4. 更新 gRPC 客户端封装
+
+在 `calculator/calculator/calculator.go` 的 `Calculator` interface 中加入：
+
+```go
+Subtract(ctx context.Context, in *BinaryOperationRequest, opts ...grpc.CallOption) (*OperationReply, error)
+```
+
+并增加实现：
+
+```go
+func (m *defaultCalculator) Subtract(
+	ctx context.Context,
+	in *BinaryOperationRequest,
+	opts ...grpc.CallOption,
+) (*OperationReply, error) {
+	client := calculatorpb.NewCalculatorClient(m.cli.Conn())
+	return client.Subtract(ctx, in, opts...)
+}
+```
+
+### 5. 接入 Gateway
+
+如果该运算继续复用 `POST /v1/calculate`，修改
+`generalgateway/internal/logic/calculatelogic.go`：
+
+```go
+if operation != "add" && operation != "multiply" && operation != "subtract" {
+	return calculateError(response.ParamError, "operation 仅支持 add、multiply 或 subtract"), nil
+}
+
+switch operation {
+case "add":
+	reply, err = client.Add(ctx, callReq)
+case "multiply":
+	reply, err = client.Multiply(ctx, callReq)
+case "subtract":
+	reply, err = client.Subtract(ctx, callReq)
+}
+```
+
+调用示例：
+
+```bash
+curl -X POST http://localhost:8080/v1/calculate \
+  -H "Content-Type: application/json" \
+  -d '{"operation":"subtract","left":50,"right":8}'
+```
+
+```json
+{"error_no":0,"error_msg":"成功","data":{"result":42}}
+```
+
+### 6. 补充测试和文档
+
+- 在 `calculator/internal/logic` 增加正常值、边界值和溢出测试。
+- 在 `generalgateway/internal/logic` 增加新 `operation` 的分发测试。
+- 同步更新 `generalgateway/docs/gateway.json` 中 `operation` 的说明。
+- 执行 `gofmt`、`go test ./...`、`go vet ./...`。
+
+如果新增的是完全独立的新 HTTP 接口，还需要同步修改
+`generalgateway/gateway.api`，再生成或补充对应 handler、logic 和 API types。
+
 ## 协议与代码生成
 
 重新生成 protobuf：
@@ -187,4 +338,3 @@ IMAGE_REPO=harbor.example.com/gozero-demo bash deploy.sh -d 1.0.0 test
 
 Calculator 和 Gateway 使用同样方式发布。正式环境必须替换三套
 `config.yaml` 中的 Etcd 占位地址，并将明文 gRPC 替换为安全传输方案。
-# gozero-demo
