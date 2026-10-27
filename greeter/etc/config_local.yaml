@@ -2,6 +2,9 @@ Name: greeter.rpc
 ListenOn: 0.0.0.0:50051
 Mode: dev
 Health: true
+CpuThreshold: 900
+Middlewares:
+  Breaker: true
 HealthServer:
   Address: 0.0.0.0:50052
 Resilience:
@@ -10,3 +13,6 @@ Resilience:
     rate: 200
     burst: 400
     keyTTL: 10m
+    redis:
+      host: 127.0.0.1:6379
+      type: node

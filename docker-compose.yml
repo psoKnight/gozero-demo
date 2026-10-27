@@ -23,6 +23,18 @@ services:
       retries: 20
     restart: unless-stopped
 
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "no"]
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
   greeter:
     build:
       context: ./greeter/docker
@@ -31,6 +43,8 @@ services:
       - "50052"
     depends_on:
       etcd:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:50052/status.html"]
@@ -48,6 +62,8 @@ services:
     depends_on:
       etcd:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:50054/status.html"]
       interval: 5s
@@ -62,6 +78,8 @@ services:
       - "8080:8080"
     depends_on:
       etcd:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       greeter:
         condition: service_healthy

@@ -19,9 +19,14 @@ func TestConfigFiles(t *testing.T) {
 			if !c.Resilience.HTTPRateLimit.Enabled {
 				t.Fatal("HTTP rate limit must be enabled")
 			}
-			if !c.Resilience.CircuitBreaker.Greeter.Enabled ||
-				!c.Resilience.CircuitBreaker.Calculator.Enabled {
-				t.Fatal("both circuit breakers must be enabled")
+			if !c.Middlewares.Breaker || !c.Middlewares.Shedding {
+				t.Fatal("REST breaker and shedding must be enabled")
+			}
+			if c.CpuThreshold <= 0 {
+				t.Fatal("CPU threshold must be positive")
+			}
+			if !c.Greeter.Middlewares.Breaker || !c.Calculator.Middlewares.Breaker {
+				t.Fatal("zrpc client breakers must be enabled")
 			}
 			if _, err := c.Greeter.BuildTarget(); err != nil {
 				t.Fatalf("Greeter.BuildTarget() error = %v", err)

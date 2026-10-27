@@ -20,24 +20,12 @@ type Config struct {
 }
 
 type ResilienceConfig struct {
-	HTTPRateLimit  resilience.RateLimitConfig `json:"httpRateLimit"`
-	CircuitBreaker CircuitBreakerConfig       `json:"circuitBreaker"`
-}
-
-type CircuitBreakerConfig struct {
-	Greeter    resilience.CircuitBreakerConfig `json:"greeter"`
-	Calculator resilience.CircuitBreakerConfig `json:"calculator"`
+	HTTPRateLimit resilience.RateLimitConfig `json:"httpRateLimit"`
 }
 
 func (c Config) Validate() error {
 	if err := c.Resilience.HTTPRateLimit.Validate(); err != nil {
 		return fmt.Errorf("resilience.httpRateLimit: %w", err)
-	}
-	if err := c.Resilience.CircuitBreaker.Greeter.Validate(); err != nil {
-		return fmt.Errorf("resilience.circuitBreaker.greeter: %w", err)
-	}
-	if err := c.Resilience.CircuitBreaker.Calculator.Validate(); err != nil {
-		return fmt.Errorf("resilience.circuitBreaker.calculator: %w", err)
 	}
 	return nil
 }

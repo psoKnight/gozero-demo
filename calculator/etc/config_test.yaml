@@ -2,6 +2,9 @@ Name: calculator.rpc
 ListenOn: 0.0.0.0:50053
 Mode: test
 Health: true
+CpuThreshold: 900
+Middlewares:
+  Breaker: true
 Etcd:
   Hosts:
     - etcd:2379
@@ -14,3 +17,6 @@ Resilience:
     rate: 200
     burst: 400
     keyTTL: 10m
+    redis:
+      host: redis:6379
+      type: node

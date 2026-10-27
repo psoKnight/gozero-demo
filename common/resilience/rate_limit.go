@@ -10,8 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zeromicro/go-zero/core/limit"
 	"github.com/zeromicro/go-zero/core/logx"
-	"golang.org/x/time/rate"
+	"github.com/zeromicro/go-zero/core/stores/redis"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,7 +21,7 @@ import (
 const rateLimitedMessage = "请求过于频繁，请稍后重试"
 
 type limiterEntry struct {
-	limiter  *rate.Limiter
+	limiter  *limit.TokenLimiter
 	lastSeen time.Time
 }
 
@@ -32,12 +33,13 @@ type rateLimitResponse struct {
 // RateLimiter provides independent in-process token buckets per key.
 type RateLimiter struct {
 	name        string
-	limit       rate.Limit
+	rate        int
 	burst       int
 	keyTTL      time.Duration
 	mu          sync.Mutex
 	entries     map[string]*limiterEntry
 	lastCleanup time.Time
+	store       *redis.Redis
 }
 
 // NewRateLimiter creates a limiter when the supplied config is enabled.
@@ -48,12 +50,17 @@ func NewRateLimiter(conf RateLimitConfig, name string) (*RateLimiter, error) {
 	if !conf.Enabled {
 		return nil, nil
 	}
+	store, err := redis.NewRedis(conf.Redis)
+	if err != nil {
+		return nil, fmt.Errorf("create rate limit redis: %w", err)
+	}
 	return &RateLimiter{
 		name:    name,
-		limit:   rate.Limit(conf.Rate),
+		rate:    conf.Rate,
 		burst:   conf.Burst,
 		keyTTL:  conf.KeyTTL,
 		entries: make(map[string]*limiterEntry),
+		store:   store,
 	}, nil
 }
 
@@ -61,7 +68,7 @@ func NewRateLimiter(conf RateLimitConfig, name string) (*RateLimiter, error) {
 func (l *RateLimiter) HTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		key := fmt.Sprintf("http|%s|%s|%s", clientIP(r), r.Method, r.URL.Path)
-		if l.allow(key) {
+		if l.allow(r.Context(), key) {
 			next(w, r)
 			return
 		}
@@ -82,7 +89,7 @@ func (l *RateLimiter) HTTPMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (l *RateLimiter) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		key := "grpc|" + info.FullMethod
-		if !l.allow(key) {
+		if !l.allow(ctx, key) {
 			logx.WithContext(ctx).Errorf("rate limit rejected: limiter=%s key=%s", l.name, key)
 			return nil, status.Error(codes.ResourceExhausted, "rate limit exceeded")
 		}
@@ -90,7 +97,7 @@ func (l *RateLimiter) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
-func (l *RateLimiter) allow(key string) bool {
+func (l *RateLimiter) allow(ctx context.Context, key string) bool {
 	now := time.Now()
 	l.mu.Lock()
 	if l.lastCleanup.IsZero() || now.Sub(l.lastCleanup) >= l.keyTTL {
@@ -104,14 +111,14 @@ func (l *RateLimiter) allow(key string) bool {
 
 	entry, ok := l.entries[key]
 	if !ok {
-		entry = &limiterEntry{limiter: rate.NewLimiter(l.limit, l.burst)}
+		entry = &limiterEntry{limiter: limit.NewTokenLimiter(l.rate, l.burst, l.store, l.name+"|"+key)}
 		l.entries[key] = entry
 	}
 	entry.lastSeen = now
 	limiter := entry.limiter
 	l.mu.Unlock()
 
-	return limiter.AllowN(now, 1)
+	return limiter.AllowCtx(ctx)
 }
 
 func clientIP(r *http.Request) string {

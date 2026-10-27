@@ -19,6 +19,9 @@ func TestConfigFiles(t *testing.T) {
 			if c.HealthServer.Address == "" {
 				t.Fatal("HealthServer.Address is empty")
 			}
+			if !c.Middlewares.Breaker || c.CpuThreshold <= 0 {
+				t.Fatal("go-zero RPC breaker and CPU shedding must be enabled")
+			}
 			if !c.Resilience.GRPCRateLimit.Enabled {
 				t.Fatal("gRPC rate limit must be enabled")
 			}

@@ -13,17 +13,23 @@ HTTP request
 - `generalgateway`：HTTP JSON 网关，提供 `POST /v1/hello` 和 `POST /v1/calculate`。
 - `greeter`：gRPC 问候服务，监听 `50051`，健康检查监听 `50052`。
 - `calculator`：gRPC 整数计算服务，监听 `50053`，健康检查监听 `50054`。
-- `common/resilience`：进程内 Key 级令牌桶、gRPC 服务端限流和分下游熔断器。
+- `common/resilience`：go-zero Redis 令牌桶的 HTTP/gRPC 中间件适配。
 - `pbdata`：protobuf 协议及生成代码。
 - `generalgateway/gateway.api`：go-zero API 路由定义。
 - `generalgateway/docs/gateway.json`：OpenAPI 2.0 文档。
 
 ## 本地运行
 
-要求 Go 1.26+、goctl 1.10+、Protocol Buffers、`protoc-gen-go` 和
+要求 Go 1.26+、goctl 1.10+、Redis 7+、Protocol Buffers、`protoc-gen-go` 和
 `protoc-gen-go-grpc`。
 
-分别在三个终端启动：
+先启动本地 Redis：
+
+```bash
+redis-server --port 6379
+```
+
+然后分别在三个终端启动：
 
 ```bash
 go run ./greeter -f=greeter/etc/config_local.yaml
@@ -32,7 +38,8 @@ go run ./generalgateway -f=generalgateway/etc/config_local.yaml
 ```
 
 网关入口为 `http://127.0.0.1:8080`。本地配置使用 gRPC 直连，网关指向
-`127.0.0.1:50051` 和 `127.0.0.1:50053`，不依赖 Etcd。
+`127.0.0.1:50051` 和 `127.0.0.1:50053`，不依赖 Etcd；限流依赖
+`127.0.0.1:6379` 的 Redis。
 
 ## API
 
@@ -103,7 +110,7 @@ GET http://localhost:8080/swagger
 | --- | --- | --- |
 | `config_local.yaml` | 本机开发 | Gateway 直连两个 gRPC 服务 |
 | `config_test.yaml` | Compose / 测试环境 | Etcd `etcd:2379` |
-| `config.yaml` | 正式环境 | Etcd 占位地址，发布前必须替换 |
+| `config.yaml` | 正式环境 | Etcd 和 Redis 占位地址，发布前必须替换 |
 
 测试和正式配置中的服务注册键为：
 
@@ -115,23 +122,78 @@ calculator.rpc
 Go-Zero zrpc 内置 gRPC Health 服务并注册到 Etcd。进程异常退出后，Etcd 租约自动
 过期，客户端通过 Watch 更新端点。
 
-## 限流与熔断
+## 内置限流、熔断与降载
 
-HTTP 限流维度为客户端 IP + HTTP Method + Path，超过限制时返回 HTTP 429：
+项目使用 go-zero 提供的基础能力：
+
+- `core/limit.TokenLimiter`：Redis 分布式令牌桶。
+- REST `Middlewares.Breaker`：Gateway 路由级内置熔断。
+- zrpc `Middlewares.Breaker`：RPC Server 以及 Gateway 下游 Client 内置熔断。
+- REST `Middlewares.Shedding` 与 `CpuThreshold`：Gateway CPU 自适应降载。
+- zrpc `CpuThreshold`：RPC Server CPU 自适应降载。
+
+HTTP 限流维度为客户端 IP + HTTP Method + Path，令牌桶状态存放在 Redis，
+因此多个 Gateway 实例共享配额。超过限制时返回 HTTP 429：
 
 ```json
 {"error_no":1429,"error_msg":"请求过于频繁，请稍后重试"}
 ```
 
-Greeter 和 Calculator 在 gRPC 服务端按方法分别限流，超限使用标准 gRPC
-`ResourceExhausted`。网关会把它转换成业务码 1429。
+Greeter 和 Calculator 在 gRPC 服务端按方法使用同一 Redis 令牌桶，所有服务副本
+共享配额，超限使用标准 gRPC `ResourceExhausted`。网关会把它转换成业务码 1429。
 
-Gateway 为 Greeter 和 Calculator 分别维护熔断器。`InvalidArgument`、
-`OutOfRange`、`ResourceExhausted` 等业务状态不会计入系统失败；超时、连接失败、
-`Unavailable` 等错误会累计失败次数。熔断打开后，网关直接返回业务码 1503。
+Gateway 的 zrpc Client 使用 go-zero 内置自适应熔断器。`InvalidArgument`、
+`OutOfRange`、`ResourceExhausted` 等业务状态不会触发熔断；系统错误会进入
+go-zero 的自适应失败率统计。熔断打开后，网关返回业务码 1503。
 
-所有下游调用同时有 3 秒上下文超时和 zrpc 客户端超时。限流器与熔断器均为进程级
-状态；如果要求集群级统一配额，应在 API Gateway、Service Mesh 或 Redis 中实现。
+所有下游调用同时保留 3 秒上下文超时和 zrpc 客户端超时。go-zero 内置熔断器不使用
+固定 `failureThreshold`、`interval`、`timeout` 和 `halfOpenMaxRequests`
+配置，而是根据请求量、成功率和延迟自适应调整。
+
+Gateway 关键配置：
+
+```yaml
+CpuThreshold: 900
+Middlewares:
+  Breaker: true
+  Shedding: true
+
+Greeter:
+  Middlewares:
+    Breaker: true
+
+Resilience:
+  HTTPRateLimit:
+    enabled: true
+    rate: 100
+    burst: 200
+    keyTTL: 10m
+    redis:
+      host: 127.0.0.1:6379
+      type: node
+```
+
+Greeter 和 Calculator 关键配置：
+
+```yaml
+CpuThreshold: 900
+Middlewares:
+  Breaker: true
+
+Resilience:
+  GRPCRateLimit:
+    enabled: true
+    rate: 200
+    burst: 400
+    keyTTL: 10m
+    redis:
+      host: 127.0.0.1:6379
+      type: node
+```
+
+`keyTTL` 只清理进程内保存的 Key 到 TokenLimiter 的映射。Redis 令牌桶 Key 的
+TTL 由 go-zero 根据 `rate` 和 `burst` 自动计算。Redis 暂时不可用时，
+`core/limit.TokenLimiter` 会自动切换为当前进程内的 rescue 限流器。
 
 ## 新增 Calculator 运算
 
@@ -323,7 +385,8 @@ goctl api validate --api generalgateway/gateway.api
 docker compose up --build -d
 ```
 
-Compose 内置单节点 Etcd，Greeter 和 Calculator 不占用宿主固定端口。可动态扩缩容：
+Compose 内置单节点 Etcd 和 Redis，Greeter 和 Calculator 不占用宿主固定端口。
+可动态扩缩容：
 
 ```bash
 docker compose up -d --scale greeter=3 --scale calculator=2
@@ -337,4 +400,4 @@ IMAGE_REPO=harbor.example.com/gozero-demo bash deploy.sh -d 1.0.0 test
 ```
 
 Calculator 和 Gateway 使用同样方式发布。正式环境必须替换三套
-`config.yaml` 中的 Etcd 占位地址，并将明文 gRPC 替换为安全传输方案。
+`config.yaml` 中的 Etcd、Redis 占位地址，并将明文 gRPC 替换为安全传输方案。

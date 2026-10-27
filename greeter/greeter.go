@@ -30,7 +30,6 @@ func main() {
 	if err != nil {
 		panic(fmt.Errorf("init gRPC rate limiter: %w", err))
 	}
-
 	s := zrpc.MustNewServer(c.RpcServerConf, func(grpcServer *grpc.Server) {
 		greeterpb.RegisterGreeterServer(grpcServer, server.NewGreeterServer(ctx))
 
