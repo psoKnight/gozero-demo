@@ -1,0 +1,31 @@
+Name: generalgateway
+Host: 0.0.0.0
+Port: 8080
+Timeout: 3000
+Greeter:
+  Endpoints:
+    - 127.0.0.1:50051
+  Timeout: 3000
+Calculator:
+  Endpoints:
+    - 127.0.0.1:50053
+  Timeout: 3000
+Resilience:
+  HTTPRateLimit:
+    enabled: true
+    rate: 100
+    burst: 200
+    keyTTL: 10m
+  CircuitBreaker:
+    Greeter:
+      enabled: true
+      failureThreshold: 5
+      interval: 30s
+      timeout: 15s
+      halfOpenMaxRequests: 1
+    Calculator:
+      enabled: true
+      failureThreshold: 5
+      interval: 30s
+      timeout: 15s
+      halfOpenMaxRequests: 1

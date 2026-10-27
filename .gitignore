@@ -1,0 +1,5 @@
+.idea/
+*.log
+docker/release/
+**/docker/release/
+coverage.out

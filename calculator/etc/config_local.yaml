@@ -1,0 +1,12 @@
+Name: calculator.rpc
+ListenOn: 0.0.0.0:50053
+Mode: dev
+Health: true
+HealthServer:
+  Address: 0.0.0.0:50054
+Resilience:
+  GRPCRateLimit:
+    enabled: true
+    rate: 200
+    burst: 400
+    keyTTL: 10m

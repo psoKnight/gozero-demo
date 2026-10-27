@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package calculatorpb;
+
+option go_package = "gozero-demo/pbdata/calculatorpb;calculatorpb";
+
+service Calculator {
+  rpc Add(BinaryOperationRequest) returns (OperationReply);
+  rpc Multiply(BinaryOperationRequest) returns (OperationReply);
+}
+
+message BinaryOperationRequest {
+  int64 left = 1;
+  int64 right = 2;
+}
+
+message OperationReply {
+  int64 result = 1;
+}

@@ -1,0 +1,12 @@
+Name: greeter.rpc
+ListenOn: 0.0.0.0:50051
+Mode: dev
+Health: true
+HealthServer:
+  Address: 0.0.0.0:50052
+Resilience:
+  GRPCRateLimit:
+    enabled: true
+    rate: 200
+    burst: 400
+    keyTTL: 10m

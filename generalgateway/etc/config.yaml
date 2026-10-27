@@ -1,0 +1,36 @@
+Name: generalgateway
+Host: 0.0.0.0
+Port: 8080
+Mode: pro
+Timeout: 3000
+Greeter:
+  Etcd:
+    Hosts:
+      - etcd.example.internal:2379
+    Key: greeter.rpc
+  Timeout: 3000
+Calculator:
+  Etcd:
+    Hosts:
+      - etcd.example.internal:2379
+    Key: calculator.rpc
+  Timeout: 3000
+Resilience:
+  HTTPRateLimit:
+    enabled: true
+    rate: 100
+    burst: 200
+    keyTTL: 10m
+  CircuitBreaker:
+    Greeter:
+      enabled: true
+      failureThreshold: 5
+      interval: 30s
+      timeout: 15s
+      halfOpenMaxRequests: 1
+    Calculator:
+      enabled: true
+      failureThreshold: 5
+      interval: 30s
+      timeout: 15s
+      halfOpenMaxRequests: 1

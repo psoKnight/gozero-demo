@@ -1,0 +1,16 @@
+Name: greeter.rpc
+ListenOn: 0.0.0.0:50051
+Mode: pro
+Health: true
+Etcd:
+  Hosts:
+    - etcd.example.internal:2379
+  Key: greeter.rpc
+HealthServer:
+  Address: 0.0.0.0:50052
+Resilience:
+  GRPCRateLimit:
+    enabled: true
+    rate: 200
+    burst: 400
+    keyTTL: 10m

@@ -1,0 +1,48 @@
+syntax = "v1"
+
+info (
+	title:   "gozero-demo gateway"
+	version: "1.0"
+)
+
+type HelloRequest {
+	Name string `json:"name"`
+}
+
+type HelloData {
+	Message string `json:"message"`
+}
+
+type HelloResponse {
+	ErrorNo  int        `json:"error_no"`
+	ErrorMsg string     `json:"error_msg"`
+	Data     *HelloData `json:"data,omitempty"`
+}
+
+type CalculateRequest {
+	Operation string `json:"operation"`
+	Left      string `json:"left"`
+	Right     string `json:"right"`
+}
+
+type CalculateData {
+	Result int64 `json:"result"`
+}
+
+type CalculateResponse {
+	ErrorNo  int            `json:"error_no"`
+	ErrorMsg string         `json:"error_msg"`
+	Data     *CalculateData `json:"data,omitempty"`
+}
+
+@server (
+	prefix: /v1
+)
+service generalgateway-api {
+	@handler Hello
+	post /hello (HelloRequest) returns (HelloResponse)
+
+	@handler Calculate
+	post /calculate (CalculateRequest) returns (CalculateResponse)
+}
+
